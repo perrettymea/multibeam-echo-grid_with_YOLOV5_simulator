@@ -1,3 +1,5 @@
+Perret Tyméa Modification of the antenna modelling in order to model the Reson Seabat 7150. The aim is to identify which detections made by YOLOv5 come from the secondary lobes of the antennas.  This code cannot yet be used outside ifremer (intentionally fragmented public version), development in progress. 
+
 .. SPDX-FileCopyrightText: 2022 - 2023 Peter Urban, Ghent University
 ..
 .. SPDX-License-Identifier: MPL-2.0

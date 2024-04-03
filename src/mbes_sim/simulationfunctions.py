@@ -1,9 +1,12 @@
 # SPDX-FileCopyrightText: 2022 GEOMAR Helmholtz Centre for Ocean Research Kiel
 #
 # SPDX-License-Identifier: MPL-2.0
+import sys
 
+sys.path.append('W:\\13_TRACKING\\URBAN\\src\\')
 from matplotlib import pyplot as plt
-
+import mbes_sim.simulationfunctions as SIMFUN
+import mbes_sim.functions.create_bubblesfunctions as bubbles
 import math
 import numpy as np
 from copy import deepcopy
@@ -18,7 +21,7 @@ import gc
 
 from scipy import signal
 
-from numba import njit,prange
+from numba import njit, prange
 
 import random
 import time
@@ -38,9 +41,11 @@ import mbes_sim.functions.beampatternfunctions as bpf
 import mbes_sim.mbes as mb
 import mbes_sim.scattergrid as sg
 import mbes_sim.simulation as SIM
+import yaml
 
 """Functions to run simulations
 """
+
 
 # ----- simulation setup classes -----
 # these enumerator describe the possible values for the simulation setup
@@ -49,10 +54,10 @@ class t_Window(IntEnum):
     """Window types for the beampattern function
     """
 
-    Box = 0,    # Unshaded beam pattern
-    Exponential = 1,   # exponentially shaded beam pattern
+    Box = 0,  # Unshaded beam pattern
+    Exponential = 1,  # exponentially shaded beam pattern
     Hann = 2,  # hann shaded beam pattern
-    idealized = 3 # idealized beampattern (rectangular)
+    idealized = 3  # idealized beampattern (rectangular)
 
     def __str__(self):
         if self.value == t_Window.Box: return 'Box'
@@ -67,14 +72,15 @@ class t_Window(IntEnum):
             except:
                 pass
 
+
 class t_Survey(IntEnum):
     """Survey types for the simulation
     
     Note: to create a survey with exagerated motion, use the exagHPR parameter in the SimulationSetup class
     """
 
-    IdealMotion = 0, # No yaw pitch roll motion
-    RealMotion = 1 # real vessel motion from navigation data
+    IdealMotion = 0,  # No yaw pitch roll motion
+    RealMotion = 1  # real vessel motion from navigation data
 
     def __str__(self):
         if self.value == t_Survey.IdealMotion: return 'Flat'
@@ -88,11 +94,12 @@ class t_Survey(IntEnum):
             except:
                 pass
 
+
 class t_Bubbles(IntEnum):
     """_Bubble target types for the simulation
     """
-    SingleBubble = 0,   # Single bubble target
-    BubbleStream = 1,   # Bubble stream target
+    SingleBubble = 0,  # Single bubble target
+    BubbleStream = 1,  # Bubble stream target
 
     def __str__(self):
         if self.value == t_Bubbles.SingleBubble: return 'SingleBubble'
@@ -160,7 +167,8 @@ class TargetGenerator(object):
     def __len__(self):
         return self.num
 
-def init_angular_resolution(numAngles: int, verbose = False):
+
+def init_angular_resolution(numAngles: int, verbose=False):
     """Initialize the angular resolution for the beampattern functions
 
     Parameters
@@ -173,8 +181,9 @@ def init_angular_resolution(numAngles: int, verbose = False):
     bpf.init(numAngles)
 
     if verbose:
-        print('Angular resolution for beampattern functions:',bpf.ANGLE_RESOLUTION,'angles')
-        print('Angular resolution for beampattern functions:',round(1/bpf.DELTA_ANGLE_DEG,2),'angle steps per °')
+        print('Angular resolution for beampattern functions:', bpf.ANGLE_RESOLUTION, 'angles')
+        print('Angular resolution for beampattern functions:', round(1 / bpf.DELTA_ANGLE_DEG, 2), 'angle steps per °')
+
 
 def get_AngleResolution():
     """Get the angular resolution for the beampattern functions
@@ -187,33 +196,45 @@ class SimulationSetup(object):
     """
 
     def __init__(self,
-                 addPlots : bool = False,
-                 prefix : str = '',
-                 blockAvg : bool = True,
-                 downfactor : float = 1,
-                 resfactor : float = 1,
-                 windowType : t_Window = t_Window.Box,
-                 idealizedBeampattern : bool = False,
-                 equiDist   : bool = False,
-                 surveyType : t_Survey = t_Survey.IdealMotion,
-                 motionDataPath = None,
-                 voxelsize  : float = 1.5,
-                 voxelsizeZ  : float = None,
-                 surveyspeedKnots : float = 3,
-                 swathdistance : float = 0.8,
-                 bubbleType : t_Bubbles = t_Bubbles.SingleBubble,
-                 layerDepths : list = [80, 105],
-                 layerSizes : list = [20,20],
-                 exagHPR : float = 1,
-                 maxDepth : float = 125,
-                 maxRange : float = 125,
-                 NumBeams : int = 256,
-                 NumElements : int = 128,
-                 SampleDistance: float = 0.324, # 432 µs * 1500 m/s / 2
-                 EffectivePulseWidth: float = 0.5625, # 750 µs * 1500 m/s / 2
+                 addPlots: bool = False,
+                 prefix: str = '',
+                 blockAvg: bool = True,
+                 downfactor: float = 1,
+                 resfactor: float = 1,
+                 windowType: t_Window = t_Window.Box,
+                 idealizedBeampattern: bool = False,
+                 equiDist: bool = True,
+                 surveyType: t_Survey = t_Survey.IdealMotion,
+                 motionDataPath=None,
+                 voxelsize: float = 1.5,
+                 survey_positions: float = None,
+                 voxelsizeZ: float = None,
+                 surveyspeedKnots: float = 3,
+                 swathdistance: float = 0.8,
+                 bubbleType: t_Bubbles = t_Bubbles.SingleBubble,
+                 layerDepths: list = [80, 105],
+                 layerSizes: list = [20, 20],
+                 exagHPR: float = 1,
+                 maxDepth: float = 125,
+                 maxRange: float = 125,
+                 NumBeams: int = 256,
+                 sampling_rate: float = 10000,
+                 NumElements_Tx: int = 128,
+                 EffectivePulseWidth_Tx: float = 0.5625,  # 750 µs * 1500 m/s / 2
+                 NumElements_Rx: int = 128,
+                 SampleDistance_Rx: float = 0.324,  # 432 µs * 1500 m/s / 2
+                 SampleDistance_Tx: float = 0.324,  # 432 µs * 1500 m/s / 2
+                 EffectivePulseWidth_Rx: float = 0.5625,  # 750 µs * 1500 m/s / 2
+                 freq_Rx: float = 24000,
+                 freq_Tx: float = 24000,
+                 sensors_spacing_Rx: float = 0.02708,
+                 sensors_spacing_Tx: float = 0.04333,
+                 beam_steering_Tx: float = 2,
+                 broken_sensors_Rx: list = [],
+                 broken_sensors_Tx: list = [],
                  BaseDirectory='simulation_results',
-                 load_previous_simresults : bool = True,
-                 verbose : bool = False
+                 load_previous_simresults: bool = True,
+                 verbose: bool = False
                  ):
         """Initialize a simulation setup object
 
@@ -278,48 +299,64 @@ class SimulationSetup(object):
             If true, try to load previous sim results (usefull for continuing a simulation), by default True
         verbose : bool, optional
             Print extra output, by default False
+            :type sensors_spacing_Rx: object
 
         """
 
+        self.sensors_spacing_tx = None
         setup = dict()
 
         self.motionDataPath = motionDataPath
 
-        self.AddPlots     = addPlots
-        setup['prefix']        = prefix
-        setup['blockAvg']            = blockAvg  # float
-        setup['downfactor']            = downfactor  # float
-        setup['resfactor']            = resfactor  # float
-        setup['windowType']       = windowType  # box, exponential, hann
+        self.AddPlots = addPlots
+        setup['prefix'] = prefix
+        setup['blockAvg'] = blockAvg  # float
+        setup['downfactor'] = downfactor  # float
+        setup['resfactor'] = resfactor  # float
+        setup['windowType'] = windowType  # box, exponential, hann
         setup['idealizedBeampattern'] = idealizedBeampattern  # bool
-        setup['equiDist']      = equiDist  # box, exponential, hann
-        setup['surveyType']       = surveyType  # flat, nav
-        setup['voxelsize']     = voxelsize
-        setup['voxelsizeZ']    = voxelsizeZ
+        setup['equiDist'] = equiDist  # box, exponential, hann
+        setup['survey_positions'] = survey_positions
+        setup['surveyType'] = surveyType  # flat, nav
+        setup['voxelsize'] = voxelsize
+        setup['voxelsizeZ'] = voxelsizeZ
         setup['surveyspeedKnots'] = surveyspeedKnots
-        setup['swathdistance']     = swathdistance
-        setup['bubbleType']       = bubbleType
-        setup['layerDepths']   = layerDepths
-        setup['layerSizes']    = layerSizes
-        setup['exagHPR']       = exagHPR
+        setup['swathdistance'] = swathdistance
+        setup['bubbleType'] = bubbleType
+        setup['layerDepths'] = layerDepths
+        setup['layerSizes'] = layerSizes
+        setup['exagHPR'] = exagHPR
 
-        setup['MaxDepth']       = maxDepth  #max depth of the bubbles
-        setup['MaxRange']       = maxRange  #max recording range of the MBES
+        setup['MaxDepth'] = maxDepth  # max depth of the bubbles
+        setup['MaxRange'] = maxRange  # max recording range of the MBES
 
-        setup['NumBeams']       = NumBeams 
-        setup['NumElements']     = NumElements
-        setup['SampleDistance'] = SampleDistance
-        setup['EffectivePulseWidth'] = EffectivePulseWidth
+        setup['NumBeams'] = NumBeams
+        setup['NumElements_Rx'] = NumElements_Rx
+        setup['SampleDistance_Rx'] = SampleDistance_Rx
+        setup['EffectivePulseWidth_Rx'] = EffectivePulseWidth_Rx
+
+        setup['NumElements_Tx'] = NumElements_Tx
+        setup['SampleDistance_Tx'] = SampleDistance_Tx
+        setup['EffectivePulseWidth_Tx'] = EffectivePulseWidth_Tx
+
+        setup["freq_rx"] = freq_Rx
+        setup["sampling_rate"] = sampling_rate
+        setup["freq_tx"] = freq_Tx
+        setup["sensors_spacing_rx"] = sensors_spacing_Rx
+        setup["sensors_spacing_tx"] = sensors_spacing_Tx
+        setup["beam_steering_Tx"] = beam_steering_Tx
+        setup["broken_sensors_rx"] = broken_sensors_Rx
+        setup["broken_sensors_tx"] = broken_sensors_Tx
 
         self.BaseDirectory = BaseDirectory
 
-
-        self.call_setups(setup = setup,
-                         verbose = verbose,
-                         load_previous_simresults = load_previous_simresults)
+        self.call_setups(setup=setup,
+                         verbose=verbose,
+                         load_previous_simresults=load_previous_simresults)
+        print("setup done")
 
     @staticmethod
-    def get_previous_simreturns(setup : dict, BaseDirectory : str, verbose = False) -> pd.DataFrame:
+    def get_previous_simreturns(setup: dict, BaseDirectory: str, verbose=False) -> pd.DataFrame:
         """Load the previous simulation results for the given setups
 
         Parameters
@@ -343,7 +380,8 @@ class SimulationSetup(object):
         """
 
         try:
-            _setup, SimulationResults = SimulationSetup.load_simreturns(SimulationSetup.create_simulation_name(SimSetup=setup,BaseDirectory=BaseDirectory), verbose)
+            _setup, SimulationResults = SimulationSetup.load_simreturns(
+                SimulationSetup.create_simulation_name(SimSetup=setup, BaseDirectory=BaseDirectory), verbose)
         except Exception as e:
             print("WARNING[get_previous_simreturns]::load_prevous_simresults Exception:", e)
             _setup = setup
@@ -356,17 +394,17 @@ class SimulationSetup(object):
         for k in _setup.keys():
             if _setup[k] != setup[k]:
                 raise RuntimeError(
-                    'ERROR[get_previous_simreturns]::load_prevous_simresults: Setup Missmatch! [{}]{} != [{}]{}'.format(k,
-                                                                                                            _setup[
-                                                                                                                k],
-                                                                                                            k,
-                                                                                                            setup[
-                                                                                                                k]))
+                    'ERROR[get_previous_simreturns]::load_prevous_simresults: Setup Missmatch! [{}]{} != [{}]{}'.format(
+                        k,
+                        _setup[
+                            k],
+                        k,
+                        setup[
+                            k]))
 
         return SimulationResults
 
-
-    def call_setups(self,setup : dict, load_previous_simresults : bool = True, verbose : bool = False):
+    def call_setups(self, setup: dict, load_previous_simresults: bool = True, verbose: bool = False):
         """Update the simulation setup using the given setup dict
 
         Parameters
@@ -379,82 +417,105 @@ class SimulationSetup(object):
             _description_, by default False
         """
 
-        #self.AddPlots   = setup['AddPlots']
-        self.NumBeams            = setup["NumBeams"] * setup['downfactor']
-        self.NumElements         = setup["NumElements"] * setup['downfactor'] * setup['resfactor']
-        self.SampleDistance      = setup["SampleDistance"] / setup['downfactor']
-        self.EffectivePulseWidth = setup["EffectivePulseWidth"] / setup['downfactor'] / setup['resfactor'] 
+        # self.AddPlots   = setup['AddPlots']
+        self.NumBeams = int(setup["NumBeams"] * setup['downfactor'])
+        self.NumElements_Rx = int(setup["NumElements_Rx"] * setup['downfactor'] * setup['resfactor'])
+        self.SampleDistance_Rx = setup["SampleDistance_Rx"] / setup['downfactor']
+        self.EffectivePulseWidth_Rx = setup["EffectivePulseWidth_Rx"] / setup['downfactor'] / setup['resfactor']
+        self.NumElements_Tx = int(setup["NumElements_Tx"] * setup['downfactor'] * setup['resfactor'])
+        self.EffectivePulseWidth_Tx = setup["EffectivePulseWidth_Tx"] / setup['downfactor'] / setup['resfactor']
 
         self.MaxRange = setup['MaxRange']
+        self.survey_positions = setup["survey_positions"]
         self.MaxDepth = setup['MaxDepth']
-
+        self.freq_rx = setup["freq_rx"]
+        self.freq_tx = setup["freq_tx"]
+        self.sensors_spacing_rx = setup["sensors_spacing_rx"]
+        self.sensors_spacing_tx = setup["sensors_spacing_tx"]
+        self.beam_steering_Tx = setup["beam_steering_Tx"]
+        self.broken_sensors_rx = setup["broken_sensors_rx"]
+        self.broken_sensors_tx = setup["broken_sensors_tx"]
 
         self.Multibeam = self.__init_multibeam__(setup['windowType'],
                                                  setup['equiDist'],
-                                                 num_beams             = self.NumBeams,
-                                                 num_elements          = self.NumElements,
-                                                 sample_dist           = self.SampleDistance,
-                                                 effective_pulse_length = self.EffectivePulseWidth,
-                                                 max_range             = self.MaxRange,
+                                                 num_beams=self.NumBeams,
+                                                 num_elements_rx=self.NumElements_Rx,
+                                                 num_elements_tx=self.NumElements_Tx,
+                                                 sample_dist_rx=self.SampleDistance_Rx,
+                                                 effective_pulse_length_rx=self.EffectivePulseWidth_Rx,
+                                                 effective_pulse_length_tx=self.EffectivePulseWidth_Tx,
+                                                 freq_rx=self.freq_rx,
+                                                 freq_tx=self.freq_tx,
+                                                 sensors_spacing_rx=self.sensors_spacing_rx,
+                                                 sensors_spacing_tx=self.sensors_spacing_tx,
+                                                 transmit_steeringangle_degrees=self.beam_steering_Tx,
+                                                 broken_sensors_rx=self.broken_sensors_rx,
+                                                 broken_sensors_tx=self.broken_sensors_tx,
+                                                 max_range=self.MaxRange,
                                                  verbose=verbose)
 
-
-        self.Survey,self.MotionData = self.__init_navigation__(
-            minBeamSteeringAngelRadians = self.Multibeam.beamsteeringangles_radians[0],
-            maxBeamSteeringAngelRadians = self.Multibeam.beamsteeringangles_radians[-1],
-            swathDistance = setup['swathdistance'],
-            speedKnots = setup['surveyspeedKnots'],
+        self.Survey, self.MotionData = self.__init_navigation__(
+            minBeamSteeringAngelRadians=self.Multibeam.beamsteeringangles_radians[0],
+            maxBeamSteeringAngelRadians=self.Multibeam.beamsteeringangles_radians[-1],
+            swathDistance=setup['swathdistance'],
+            survey_positions=self.survey_positions,
+            speedKnots=setup['surveyspeedKnots'],
             motionDataPath=self.motionDataPath,
-            verbose = verbose)
+            verbose=verbose)
+        print("Motion done")
 
-        self.BubbleGenerator,self.TargetGenerator = self.__init_bubbleGeneration__(
-            bubbleMode = setup['bubbleType'],
-            voxelsize  = setup['voxelsize'],
-            maxDepth   = self.MaxDepth,
-            minBeamSteeringAngelRadians = self.Multibeam.beamsteeringangles_radians[0],
-            maxBeamSteeringAngelRadians = self.Multibeam.beamsteeringangles_radians[-1]
+        self.BubbleGenerator, self.TargetGenerator = self.__init_bubbleGeneration__(
+            bubbleMode=setup['bubbleType'],
+            voxelsize=setup['voxelsize'],
+            maxDepth=self.MaxDepth,
+            minBeamSteeringAngelRadians=self.Multibeam.beamsteeringangles_radians[0],
+            maxBeamSteeringAngelRadians=self.Multibeam.beamsteeringangles_radians[-1]
         )
+        print("Bubble done")
 
         self.Simulation = self.__init_simulation__(
-                multibeam = self.Multibeam,
-                blockAvg = setup['blockAvg'],
-                voxelsize = setup['voxelsize'],
-                voxelsizeZ = setup['voxelsizeZ'],
-                survey    = self.Survey,
-                useIdealizedBeampattern = setup['idealizedBeampattern'])
+            multibeam=self.Multibeam,
+            blockAvg=setup['blockAvg'],
+            voxelsize=setup['voxelsize'],
+            voxelsizeZ=setup['voxelsizeZ'],
+            survey=self.Survey,
+            useIdealizedBeampattern=setup['idealizedBeampattern'])
 
+        print("Sim done")
 
         self.SimSetup = setup
 
         if load_previous_simresults:
-            self.SimulationResults = self.get_previous_simreturns(setup=setup,BaseDirectory=self.BaseDirectory)
+            self.SimulationResults = self.get_previous_simreturns(setup=setup, BaseDirectory=self.BaseDirectory)
 
         else:
             self.SimulationResults = pd.DataFrame()
-
 
     # internal functions
     class PGR(object):
         """Internal class for progress reporting on parallel processing
         """
-        def __init__(self,sync_val,shared_end):
+
+        def __init__(self, sync_val, shared_end):
             self.sync_val = sync_val
             self.total = shared_end
             pass
-        def reset(self,total):
+
+        def reset(self, total):
             self.sync_val.value = 0
             self.total.value = total
             pass
+
         def update(self):
             self.sync_val.value += 1
 
     @staticmethod
-    def __simulate_parallel__(simulation,return_list,shared_val,shared_end):
+    def __simulate_parallel__(simulation, return_list, shared_val, shared_end):
         """Internal function for parallel processing
         """
-        pbar = SimulationSetup.PGR(shared_val,shared_end)
+        pbar = SimulationSetup.PGR(shared_val, shared_end)
 
-        return_list.append((simulation,simulation.simulate3DEchoesGrid(progress=False, pbar = pbar)))
+        return_list.append((simulation, simulation.simulate3DEchoesGrid(progress=False, pbar=pbar)))
         shared_val.value = -1
 
         return
@@ -473,28 +534,29 @@ class SimulationSetup(object):
         """
 
         if parallelSimulations > mp.cpu_count():
-            print('Warning[simulate]: You chose more cpu cores [{}] than physically exist [{}]'.format(parallelSimulations,mp.cpu_count()))
+            print('Warning[simulate]: You chose more cpu cores [{}] than physically exist [{}]'.format(
+                parallelSimulations, mp.cpu_count()))
 
         totalSimulations = int(round(totalSimulations / parallelSimulations))
 
-        pbars = [tqdm(desc="#" + "{}".format(pid).zfill(3), position=pid +1, total =100) for pid in range(parallelSimulations)]
-        pvars = [mp.Value('i',0) for _ in range(parallelSimulations)]
-        pmaxs = [mp.Value('i',100) for _ in range(parallelSimulations)]
+        pbars = [tqdm(desc="#" + "{}".format(pid).zfill(3), position=pid + 1, total=100) for pid in
+                 range(parallelSimulations)]
+        pvars = [mp.Value('i', 0) for _ in range(parallelSimulations)]
+        pmaxs = [mp.Value('i', 100) for _ in range(parallelSimulations)]
 
-        with tqdm(desc='Sim Progress',position=parallelSimulations +1) as custom_progress:
+        with tqdm(desc='Sim Progress', position=parallelSimulations + 1) as custom_progress:
 
-            with tqdm(desc='Simulations',total=totalSimulations*parallelSimulations,position=parallelSimulations +2) as simpgrogress:
-
+            with tqdm(desc='Simulations', total=totalSimulations * parallelSimulations,
+                      position=parallelSimulations + 2) as simpgrogress:
 
                 for simsnum in range(totalSimulations):
                     simulations = []
 
                     custom_progress.reset(total=8)
-                    #print('\rSimulation: Init simulations                                 ',end='\r')
+                    # print('\rSimulation: Init simulations                                 ',end='\r')
                     custom_progress.set_postfix_str('Init simulations')
 
                     for sim_targets in self.TargetGenerator.iterarte(parallelSimulations):
-
                         sim = deepcopy(self.Simulation)
 
                         sim_survey = self.get_survey()
@@ -514,41 +576,40 @@ class SimulationSetup(object):
                     except:
                         pass
 
-
                     self.processes = []
                     manager = mp.Manager()
                     return_list = manager.list()
 
                     for pbar in pbars:
                         pbar.clear()
-                        pbar.reset(total = pbar.total)
+                        pbar.reset(total=pbar.total)
 
                     gc.collect()
                     custom_progress.update()
                     custom_progress.set_postfix_str('Start processes')
                     for pid in range(parallelSimulations):
-                        p = mp.Process(target=self.__simulate_parallel__, args=(simulations[pid],return_list, pvars[pid],pmaxs[pid]))
+                        p = mp.Process(target=self.__simulate_parallel__,
+                                       args=(simulations[pid], return_list, pvars[pid], pmaxs[pid]))
                         p.start()
                         self.processes.append(p)
 
-                    self.resulting_scatterGrids=[]
+                    self.resulting_scatterGrids = []
 
                     custom_progress.update()
                     custom_progress.set_postfix_str('Process progress')
                     while True:
                         max_reached = np.zeros(len(pvars))
-                        for pid,pv in enumerate(pvars):
+                        for pid, pv in enumerate(pvars):
 
-                            if pv.value < 0  or pv.value >= pbars[pid].total:
+                            if pv.value < 0 or pv.value >= pbars[pid].total:
                                 max_reached[pid] = 1
-                                pbars[pid].update(pbars[pid].total-pbars[pid].n)
+                                pbars[pid].update(pbars[pid].total - pbars[pid].n)
                                 pbars[pid].refresh()
                             else:
-                               if pbars[pid].total != pmaxs[pid].value:
-                                   pbars[pid].reset(total=pmaxs[pid].value)
-                               pbars[pid].update(pv.value - pbars[pid].n)
-                               pbars[pid].refresh()
-
+                                if pbars[pid].total != pmaxs[pid].value:
+                                    pbars[pid].reset(total=pmaxs[pid].value)
+                                pbars[pid].update(pv.value - pbars[pid].n)
+                                pbars[pid].refresh()
 
                         if np.sum(max_reached) >= len(pvars):
                             break
@@ -567,7 +628,7 @@ class SimulationSetup(object):
 
                     custom_progress.update()
                     custom_progress.set_postfix_str('Retreiving simresults')
-                    for ri,rl in enumerate(return_list):
+                    for ri, rl in enumerate(return_list):
                         pbars[ri].reset()
                         self.resulting_scatterGrids.append(rl)
 
@@ -577,14 +638,12 @@ class SimulationSetup(object):
                     custom_progress.update()
                     custom_progress.set_postfix_str('Processing Simresults')
                     # run the simulations in parallel than iterate through them
-                    for sim,scatterGrids in self.resulting_scatterGrids:
+                    for sim, scatterGrids in self.resulting_scatterGrids:
 
                         simret = pd.Series(dtype=object)
 
-
                         simret['sample_ranges'] = deepcopy(sim.Multibeam.sampleranges)
                         simret['survey'] = deepcopy(sim.Survey)
-
 
                         sim_targets = sim.Targets
                         simret['target_x'] = np.mean(sim_targets.x)
@@ -599,7 +658,8 @@ class SimulationSetup(object):
                         simret['target_range'] = np.mean(r)
                         simret['target_rx_angle'] = np.mean(rx_angle)
 
-                        max_db_diffs = [np.nan,-2.5,-3,-5,-6,-7.5,-8,-9,-10,-12,-12.5,-13,-15,-16,-17.5,-18,-20,-30,-40,-50,-60,-70,-80,-90]
+                        max_db_diffs = [np.nan, -2.5, -3, -5, -6, -7.5, -8, -9, -10, -12, -12.5, -13, -15, -16, -17.5,
+                                        -18, -20, -30, -40, -50, -60, -70, -80, -90]
                         simret['max_db_diffs'] = deepcopy(max_db_diffs)
 
                         target_detect = {}
@@ -610,49 +670,52 @@ class SimulationSetup(object):
 
                             try:
                                 max_db_diff = None
-                                max_val_db = 10*math.log10(np.nanmax(scattergrid.ImageAvg))
+                                max_val_db = 10 * math.log10(np.nanmax(scattergrid.ImageAvg))
 
-                                #Determine target position
+                                # Determine target position
                                 for max_db_diff in max_db_diffs:
-                                        tp = scattergrid.get_target_pos(10**((max_val_db+max_db_diff)/10))
+                                    tp = scattergrid.get_target_pos(10 ** ((max_val_db + max_db_diff) / 10))
 
-                                        target_detect[method].append(*tp,1.0)
+                                    target_detect[method].append(*tp, 1.0)
 
-                                        simret[method + '[' + str(max_db_diff) + ']'] = scattergrid.getTotalvalue(10**((max_val_db+max_db_diff)/10))
+                                    simret[method + '[' + str(max_db_diff) + ']'] = scattergrid.getTotalvalue(
+                                        10 ** ((max_val_db + max_db_diff) / 10))
 
-                                        simret['detect[' + method + '][' + str(max_db_diff) + ']_x'] = tp[0]
-                                        simret['detect[' + method + '][' + str(max_db_diff) + ']_y'] = tp[1]
-                                        simret['detect[' + method + '][' + str(max_db_diff) + ']_z'] = tp[2]
+                                    simret['detect[' + method + '][' + str(max_db_diff) + ']_x'] = tp[0]
+                                    simret['detect[' + method + '][' + str(max_db_diff) + ']_y'] = tp[1]
+                                    simret['detect[' + method + '][' + str(max_db_diff) + ']_z'] = tp[2]
 
-                                        dx = np.mean(sim_targets.x) - tp[0]
-                                        dy = np.mean(sim_targets.y) - tp[1]
-                                        dz = np.mean(sim_targets.z) - tp[2]
-                                        dist =  math.sqrt(dx * dx + dy * dy + dz * dz)
+                                    dx = np.mean(sim_targets.x) - tp[0]
+                                    dy = np.mean(sim_targets.y) - tp[1]
+                                    dz = np.mean(sim_targets.z) - tp[2]
+                                    dist = math.sqrt(dx * dx + dy * dy + dz * dz)
 
-                                        simret['detect_dist[' + method + '][' + str(max_db_diff) + ']'] = dist
-                                        simret['detect_dist_x[' + method + '][' + str(max_db_diff) + ']'] = dx
-                                        simret['detect_dist_y[' + method + '][' + str(max_db_diff) + ']'] = dy
-                                        simret['detect_dist_z[' + method + '][' + str(max_db_diff) + ']'] = dz
+                                    simret['detect_dist[' + method + '][' + str(max_db_diff) + ']'] = dist
+                                    simret['detect_dist_x[' + method + '][' + str(max_db_diff) + ']'] = dx
+                                    simret['detect_dist_y[' + method + '][' + str(max_db_diff) + ']'] = dy
+                                    simret['detect_dist_z[' + method + '][' + str(max_db_diff) + ']'] = dz
                             except Exception as e:
                                 pass
 
                         simret['methods'] = list(scatterGrids.keys())
                         simret['trueValue'] = sim_targets.sum()
 
-                        for layer_depth,layer_size in zip(self.SimSetup['layerDepths'],self.SimSetup['layerSizes']):
+                        for layer_depth, layer_size in zip(self.SimSetup['layerDepths'], self.SimSetup['layerSizes']):
 
                             cutScatterGrids, (
-                            layer_z_extend, true_layer_size_z, layer_z_coordinates) = scatterGrids.cutDepthLayer(
+                                layer_z_extend, true_layer_size_z, layer_z_coordinates) = scatterGrids.cutDepthLayer(
                                 layer_depth, layer_size)
 
                             layerTargets = sim_targets.cutDepthLayer(*layer_z_extend)
-                            simret[str(round(layer_depth,2)) + '|' + str(round(layer_size,2)) + ' - trueValue'] = layerTargets.sum()
-
+                            simret[str(round(layer_depth, 2)) + '|' + str(
+                                round(layer_size, 2)) + ' - trueValue'] = layerTargets.sum()
 
                             for method, cutScatterGrid in cutScatterGrids.items():
-                                simret[str(round(layer_depth,2)) + '|' + str(round(layer_size,2)) + ' - ' + method] = cutScatterGrid.TotalValue
+                                simret[str(round(layer_depth, 2)) + '|' + str(
+                                    round(layer_size, 2)) + ' - ' + method] = cutScatterGrid.TotalValue
 
-                                simret[str(round(layer_depth,2)) + '|' + str(round(layer_size,2)) + ' -layerMean- ' + method] = cutScatterGrid.TotalValueLayer
+                                simret[str(round(layer_depth, 2)) + '|' + str(
+                                    round(layer_size, 2)) + ' -layerMean- ' + method] = cutScatterGrid.TotalValueLayer
 
                                 try:
                                     max_db_diff = None
@@ -660,14 +723,18 @@ class SimulationSetup(object):
 
                                     # threshhold values for layers
                                     for max_db_diff in max_db_diffs:
-                                        simret[str(round(layer_depth,2)) + '|' + str(round(layer_size,2)) + ' - ' + method + '[' + str(max_db_diff) + ']'] = cutScatterGrid.getTotalvalue(
+                                        simret[str(round(layer_depth, 2)) + '|' + str(
+                                            round(layer_size, 2)) + ' - ' + method + '[' + str(
+                                            max_db_diff) + ']'] = cutScatterGrid.getTotalvalue(
                                             10 ** ((max_val_db + max_db_diff) / 10))
 
-                                        simret[str(round(layer_depth,2)) + '|' + str(round(layer_size,2)) + ' -layerMean- ' + method + '[' + str(max_db_diff) + ']'] = cutScatterGrid.getTotalvalueLayer(
+                                        simret[str(round(layer_depth, 2)) + '|' + str(
+                                            round(layer_size, 2)) + ' -layerMean- ' + method + '[' + str(
+                                            max_db_diff) + ']'] = cutScatterGrid.getTotalvalueLayer(
                                             10 ** ((max_val_db + max_db_diff) / 10))
                                 except Exception as e:
                                     pass
-                                 
+
                         # create plots
                         if self.AddPlots:
                             for name, scattergrid in scatterGrids.items():
@@ -675,10 +742,10 @@ class SimulationSetup(object):
                                 fig.suptitle = 'resample - ' + name
                                 scattergrid.plot(
                                     fig,
-                                     targets_color   = [
-                                        (sim_targets,'grey'),
-                                        (target_detect[name],'red')
-                                     ],
+                                    targets_color=[
+                                        (sim_targets, 'grey'),
+                                        (target_detect[name], 'red')
+                                    ],
                                     show_wci=True,
                                     show_echo=True,
                                     show_map=True,
@@ -687,16 +754,17 @@ class SimulationSetup(object):
                                 )
                                 simret['resample - ' + name] = fig
 
-                        self.SimulationResults = pd.concat((self.SimulationResults,simret.to_frame().T), ignore_index=True)
+                        self.SimulationResults = pd.concat((self.SimulationResults, simret.to_frame().T),
+                                                           ignore_index=True)
                         self.LastSimulationResults = simret
 
                     custom_progress.update()
                     custom_progress.set_postfix_str('Saving simresults')
-                    self.save_simreturns(self.SimSetup,self.SimulationResults,self.get_simulation_name())
+                    self.save_simreturns(self.SimSetup, self.SimulationResults, self.get_simulation_name())
 
                     custom_progress.update()
                     custom_progress.set_postfix_str('Done')
-                    simpgrogress.update((simsnum+1)*parallelSimulations-simpgrogress.n)
+                    simpgrogress.update((simsnum + 1) * parallelSimulations - simpgrogress.n)
 
         for pbar in pbars:
             pbar.close()
@@ -708,7 +776,6 @@ class SimulationSetup(object):
         del custom_progress
         gc.collect()
 
-
     def get_simulation_name(self) -> str:
         """Create name and directories / sub directories for the simulation (based on the SimSetup)
 
@@ -717,10 +784,10 @@ class SimulationSetup(object):
         str
             simulation name
         """
-        return self.create_simulation_name(self.SimSetup,self.BaseDirectory)
+        return self.create_simulation_name(self.SimSetup, self.BaseDirectory)
 
     @staticmethod
-    def create_simulation_name(SimSetup,BaseDirectory) -> str:
+    def create_simulation_name(SimSetup, BaseDirectory) -> str:
         """Internal function
         Create name and directories / sub directories for the simulation (based on the SimSetup)
 
@@ -730,11 +797,12 @@ class SimulationSetup(object):
             simulation name
         """
 
-        dir_keys = ['prefix','downfactor','resfactor','equiDist','bubbleType','windowType','surveyType','voxelsize','voxelsizeZ']
+        dir_keys = ['prefix', 'downfactor', 'resfactor', 'equiDist', 'bubbleType', 'windowType', 'surveyType',
+                    'voxelsize', 'voxelsizeZ']
 
         dir = deepcopy(BaseDirectory) + '/'
         for k in dir_keys:
-            dir +=  '{}[{}]/'.format(k,str(SimSetup[k]))
+            dir += '{}[{}]/'.format(k, str(SimSetup[k]))
 
         sim_name = ''
         for k, v in SimSetup.items():
@@ -743,17 +811,17 @@ class SimulationSetup(object):
                     sim_name += '{}[{}]'.format(k, str(v))
                 else:
                     try:
-                        sim_name += '{}[{}[{}|{}]]'.format(k,len(v),min(v),max(v))
+                        sim_name += '{}[{}[{}|{}]]'.format(k, len(v), min(v), max(v))
                     except:
-                        sim_name += '{}[{}]'.format(k,str(v))
+                        sim_name += '{}[{}]'.format(k, str(v))
 
         os.makedirs(dir, exist_ok=True)
         sim_name = dir + sim_name + '.pd'
-        sim_name = sim_name.replace(' ','')
+        sim_name = sim_name.replace(' ', '')
 
         return sim_name
 
-    def get_survey(self,exagHPR:float = None):
+    def get_survey(self, exagHPR: float = None):
         """Internal function (called by simulate)
 
         Parameters
@@ -774,14 +842,14 @@ class SimulationSetup(object):
             return deepcopy(self.Survey)
 
         return self.MotionData.get_modified_survey(self.Survey,
-                                                       #exaggerate_yaw  = exagHPR,
-                                                       exaggerate_heave = exagHPR,
-                                                       exaggerate_pitch = exagHPR,
-                                                       exaggerate_roll  = exagHPR)
+                                                   # exaggerate_yaw  = exagHPR,
+                                                   exaggerate_heave=exagHPR,
+                                                   exaggerate_pitch=exagHPR,
+                                                   exaggerate_roll=exagHPR)
 
     @staticmethod
-    def load_simreturns(simulation_path : str,
-    verbose: bool =  False):
+    def load_simreturns(simulation_path: str,
+                        verbose: bool = False):
         """Load simulation results from file
 
         Parameters
@@ -809,20 +877,20 @@ class SimulationSetup(object):
             simreturns = pd.read_hdf(simulation_path, 'simresults')
         else:
             with open(simulation_path, 'rb') as ifi:
-                setup      = pickle.load(ifi)
+                setup = pickle.load(ifi)
                 simreturns = pickle.load(ifi)
 
         if verbose:
-            print('Length of previous simreturns:',len(simreturns))
+            print('Length of previous simreturns:', len(simreturns))
 
-        return setup,simreturns
+        return setup, simreturns
 
     @staticmethod
     def save_simreturns(
-            setup : dict,
-            simulation_results : pd.DataFrame,
+            setup: dict,
+            simulation_results: pd.DataFrame,
             simulation_path: str,
-            hdf5 = False,
+            hdf5=False,
             verbose: bool = False):
         """Save simulation results to file
 
@@ -843,7 +911,7 @@ class SimulationSetup(object):
         simreturns = pd.DataFrame()
 
         if verbose:
-            print('saving simulations results to:',simulation_path)
+            print('saving simulations results to:', simulation_path)
 
         if hdf5:
             if not simulation_path.endswith('.h5'):
@@ -855,54 +923,85 @@ class SimulationSetup(object):
             if not simulation_path.endswith('.pd'):
                 '.'.join(simulation_path.split('.')[:-1]) + '.pd'
             with open(simulation_path, 'wb') as ofi:
-                pickle.dump(setup,ofi)
-                pickle.dump(simulation_results,ofi)
+                pickle.dump(setup, ofi)
+                pickle.dump(simulation_results, ofi)
 
     @staticmethod
-    def __init_multibeam__(windowType : t_Window,
-                           equiDist   : bool = True,
-                           num_beams : int = 256,
-                           num_elements : int = 128,
-                           sample_dist : float = 0.324,
-                           effective_pulse_length : float = 0.375,
-                           max_range : float = 125,
-                           verbose = False):
+    def __init_multibeam__(windowType: t_Window,
+                           equiDist: bool = True,
+                           num_beams: int = 256,
+                           num_elements_rx: int = 128,
+                           num_elements_tx: int = 128,
+                           sample_dist_rx: float = 0.324,
+                           effective_pulse_length_rx: float = 0.375,
+                           effective_pulse_length_tx: float = 0.375,
+                           freq_rx: float = 24000,
+                           freq_tx: float = 24000,
+                           sensors_spacing_rx: float = 0.02708,
+                           sensors_spacing_tx: float = 0.04333,
+                           broken_sensors_rx: list = [],
+                           broken_sensors_tx: list = [],
+                           transmit_steeringangle_degrees: int = 0,
+                           max_range: float = 125,
+                           verbose=False):
         """Internal function
         Initialize multibeam sonar with the given parameters
         """
 
-        elements = int(num_elements)
+        if num_elements_tx != None:
+            elements_tx = num_elements_tx
+            elements_rx = num_elements_rx
+
+        else:
+            elements_tx = int(num_elements_tx)
+            elements_rx = int(num_elements_rx)
 
         if windowType == t_Window.Box:
-            window = signal.windows.boxcar(elements)
+            window_tx = signal.windows.boxcar(elements_tx)
+            window_rx = signal.windows.boxcar(elements_rx)
         elif windowType == t_Window.Hann:
-            window = signal.windows.hann(elements)
+            window_tx = signal.windows.hann(elements_tx)
+            window_rx = signal.windows.hann(elements_rx)
+
         elif windowType == t_Window.Exponential:
-            window = signal.windows.exponential(elements, tau=elements / 2)
+            window_tx = signal.windows.exponential(elements_tx, tau=elements_tx / 2)
+            window_rx = signal.windows.exponential(elements_rx, tau=elements_rx / 2)
+        elif windowType == "Chebychev":
+            window_tx = signal.windows.chebwin(elements_tx, at=30)
+            window_rx = signal.windows.chebwin(elements_rx, at=35)
         else:
             raise RuntimeError("Unknown window:", str(windowType))
 
         if not equiDist:
-            #num_beams equiangluar beams from -60° -> 60°
-            steeringangles = np.linspace(-60, 60, int(num_beams))
+            # num_beams equiangluar beams from -60° -> 60°
+            steeringangles = np.linspace(-80, 80, int(num_beams))
         else:
-            #num_beams equidistant beams from -60° -> 60°
+            # num_beams equidistant beams from -60° -> 60°
             # min,max perpendicular distance at 1 meter distance
-            min_y = math.tan(math.radians(-60))
-            max_y = math.tan(math.radians(60))
+            min_y = math.tan(math.radians(-80))
+            max_y = math.tan(math.radians(80))
 
             # arrange 256 positions between min_y and max_y
-            ys = np.linspace(min_y, max_y, num_beams)
+            ys = np.linspace(min_y, max_y, int(num_beams))
 
             # compute angles for the positions
             steeringangles = np.degrees(np.arctan(ys))
 
         multibeam = mb.Multibeam(
-            beamsteeringangles_degrees = steeringangles,
-            sampleranges               = np.arange(1, max_range, sample_dist),
-            effective_pulse_length      = effective_pulse_length,
-            window                     = window,
-            progress                   = verbose
+            beamsteeringangles_degrees=steeringangles,
+            transmit_steeringangle_degrees=transmit_steeringangle_degrees,
+            sampleranges=np.arange(1, max_range, sample_dist_rx),
+            effective_pulse_length_rx=effective_pulse_length_rx,
+            effective_pulse_length_tx=effective_pulse_length_tx,
+            freq_rx=freq_rx,
+            freq_tx=freq_tx,
+            sensors_spacing_rx=sensors_spacing_rx,
+            sensors_spacing_tx=sensors_spacing_tx,
+            window_tx=window_tx,
+            window_rx=window_rx,
+            broken_sensors_tx=broken_sensors_tx,
+            broken_sensors_rx=broken_sensors_rx,
+            progress=verbose
         )
 
         return multibeam
@@ -911,44 +1010,54 @@ class SimulationSetup(object):
     def __init_navigation__(minBeamSteeringAngelRadians,
                             maxBeamSteeringAngelRadians,
                             speedKnots,
+                            survey_positions,
                             swathDistance,
                             motionDataPath,
-                            verbose = False):
+                            verbose=False):
         """Internal function
         Initialize the navigation object with the given parameters
         """
-        depth = 125
+        depth = 800
 
-        min_x = -abs(math.sin(minBeamSteeringAngelRadians) * depth)
-        max_x = abs(math.sin(maxBeamSteeringAngelRadians) * depth)
+        min_x = 0
+        max_x = 45
 
-        survey = nav.Survey.from_ping_distance(min_x=min_x,
+        if survey_positions is not None:
+            survey = nav.Survey.from_data(
+                survey_positions=survey_positions,
+                speedKnots=speedKnots,
+            )
+
+        else:
+
+            survey = nav.Survey.from_num_pings(min_x=min_x,
                                                max_x=max_x,
-                                               ping_spacing=swathDistance,
+                                               num_pings=2,
                                                speed_knots=speedKnots)
+            print("Survey position:", survey)
         if motionDataPath is None:
             surveyNav = survey
             MotionData = None
         else:
             try:
                 MotionData = nav.MotionData(motion_data_path=motionDataPath)
-                surveyNav      = MotionData.get_modified_survey(survey)
+                surveyNav = MotionData.get_modified_survey(survey)
             except Exception as e:
-                print("WARNING: Could not open navigation data! Exception:",e)
+                print("WARNING: Could not open navigation data! Exception:", e)
                 surveyNav = survey
                 MotionData = None
 
         if verbose:
             print(round(min_x, 2), round(max_x, 2))
 
-        return survey,MotionData
+        return survey, MotionData
 
     @staticmethod
-    def __init_bubbleGeneration__(bubbleMode : t_Bubbles,
-                                voxelsize : float,
-                                maxDepth : float,
-                                minBeamSteeringAngelRadians,
-                                maxBeamSteeringAngelRadians):
+    def __init_bubbleGeneration__(bubbleMode: t_Bubbles,
+                                  voxelsize: float,
+                                  maxDepth: float,
+                                  minBeamSteeringAngelRadians,
+                                  maxBeamSteeringAngelRadians):
         """Internal function
         Initialize the bubble generator with the given parameters
         """
@@ -956,7 +1065,7 @@ class SimulationSetup(object):
         bubbleGenerator = bubbles.BubbleGenerator(
             sigma_val=0.3,  # variation of value
             sigma_x=1,  # for bubble stream: sigma variation in x direction in m
-            sigma_y=1   # for bubble stream: sigma variation in y direction in m
+            sigma_y=1  # for bubble stream: sigma variation in y direction in m
         )
 
         if bubbleMode == t_Bubbles.SingleBubble:
@@ -991,8 +1100,7 @@ class SimulationSetup(object):
         else:
             raise RuntimeError("BubbleMode: AAAaaaah " + str(bubbleMode))
 
-
-        return bubbleGenerator,tgen
+        return bubbleGenerator, tgen
 
     @staticmethod
     def __init_simulation__(multibeam,
@@ -1013,8 +1121,10 @@ class SimulationSetup(object):
             simulation.setGridResolutionZ(voxelsizeZ)
 
         simulation.setSurvey(survey)
+        print("Survey set")
 
         simulation.setUseIdealizedBeampattern(useIdealizedBeampattern)
+        print("Pattern set")
 
         if blockAvg:
             simulation.setMethods(
@@ -1027,43 +1137,75 @@ class SimulationSetup(object):
                 [
                     SIM.GriddingMethod.sv_int_lin,
                 ])
-
+        print("Method set")
         return simulation
 
 
-
 if __name__ == '__main__':
-    init_angular_resolution(180 * 90)
+    # init_angular_resolution(180 * 90)
 
-    downfactor = 0.33
+    downfactor = 1
     resfactor = 1
-    voxsize = 1.5
+    voxsize = 1
 
     SingleTarget = True
 
-    beam_pattern = t_Window.Exponential
+    beam_pattern = t_Window.Hann
+    method_name = 'sv_int_lin'
 
-    setup = SimulationSetup(
+    # setup = SimulationSetup(
+    #     addPlots=True,
+    #     prefix='examples',
+    #     downfactor=downfactor,
+    #     blockAvg=False,
+    #     resfactor=resfactor,
+    #     windowType=beam_pattern,
+    #     idealizedBeampattern=False,
+    #     equiDist=False,
+    #     motionDataPath="../test_data/m143_l0154_motion.csv",
+    #
+    #     surveyType=t_Survey.IdealMotion,
+    #     voxelsize=voxsize / downfactor,
+    #     voxelsizeZ=voxsize / downfactor,
+    #     surveyspeedKnots=3,
+    #     swathdistance=0.8 / downfactor,
+    #     layerDepths=[],
+    #     layerSizes=[],
+    #     bubbleType=t_Bubbles.SingleBubble,
+    #     exagHPR=1,
+    #     BaseDirectory='GEOMAR_simresults',
+    #
+    #     load_previous_simresults=False,
+    #     verbose=True)
+
+    setup = SIMFUN.SimulationSetup(
         addPlots=True,
-        prefix='examples',
+        prefix='single_sim',
         downfactor=downfactor,
         blockAvg=False,
         resfactor=resfactor,
         windowType=beam_pattern,
         idealizedBeampattern=False,
-        equiDist=False,
-        motionDataPath="../test_data/m143_l0154_motion.csv",
+        equiDist=True,
+        motionDataPath="W:\\13_TRACKING\\URBAN\\examples\\nav_ghass.csv",
 
-        surveyType=t_Survey.IdealMotion,
+        # surveyType           = SIMFUN.t_Survey.IdealMotion,
+        surveyType=SIMFUN.t_Survey.RealMotion,
         voxelsize=voxsize / downfactor,
         voxelsizeZ=voxsize / downfactor,
-        surveyspeedKnots=3,
-        swathdistance=0.8 / downfactor,
+        surveyspeedKnots=8,
+        swathdistance=5 / downfactor,
+        NumBeams=256,
+        maxDepth=300,
+        maxRange=300,
+        NumElements=288,
+        SampleDistance=0.12,
+        EffectivePulseWidth=0.375,
         layerDepths=[],
         layerSizes=[],
-        bubbleType=t_Bubbles.SingleBubble,
+        bubbleType=SIMFUN.t_Bubbles.SingleBubble,
         exagHPR=1,
-        BaseDirectory='GEOMAR_simresults',
+        BaseDirectory='simresults',
 
         load_previous_simresults=False,
         verbose=True)

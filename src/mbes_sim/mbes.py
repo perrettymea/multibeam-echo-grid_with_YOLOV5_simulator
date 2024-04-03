@@ -7,17 +7,20 @@ Class to initialize a virtual multibeam system for the MBES simulation
 """
 
 # ------------------- Imports -------------------
+import sys
+
+sys.path.append('W:\\13_TRACKING\\URBAN\\src\\')
 import math
 import numpy as np
 from scipy import signal
-
+import yaml
 from numba import njit, prange
 import numba.types as ntypes
 
 import matplotlib as mpl
-#mpl.rcParams['figure.dpi'] = 200
+# mpl.rcParams['figure.dpi'] = 200
 
-#from tqdm.auto import tqdm
+# from tqdm.auto import tqdm
 from tqdm.auto import tqdm
 from matplotlib import pyplot as plt
 
@@ -29,10 +32,12 @@ import mbes_sim.functions.transformfunctions as tf
 import mbes_sim.functions.create_echofunctions as ef
 import mbes_sim.functions.create_bubblesfunctions as bubbles
 
+
+
 def init(angle_resolution):
     print("Initializing Beampattern functions")
     bf.init(angle_resolution)
-    print("ANGLE_RESOLUTION:",bf.ANGLE_RESOLUTION)
+    print("ANGLE_RESOLUTION:", bf.ANGLE_RESOLUTION)
 
 
 class Multibeam(object):
@@ -40,15 +45,23 @@ class Multibeam(object):
     """
 
     def __init__(self,
-                 beamsteeringangles_degrees: np.ndarray = np.linspace(-60,60,255),
+                 beamsteeringangles_degrees: np.ndarray = np.linspace(-75, 75, 880),
                  sampleranges: np.ndarray = np.linspace(1, 120, 376),
-                 effective_pulse_length: float = 0.375, #0.36845,
-                 window: np.ndarray = np.ones(128),
+                 effective_pulse_length_rx: float = 0.375,  # 0.36845,
+                 effective_pulse_length_tx: float = 0.375,  # 0.36845,
+                 window_tx: np.ndarray = np.ones(800),
+                 window_rx: np.ndarray = np.ones(800),
                  f0: float = 100000,
-                 freq: float = 80000,
+                 freq_rx: float = 24000,
+                 freq_tx: float = 24000,
+                 sensors_spacing_rx: float = 0.02708,
+                 sensors_spacing_tx: float = 0.04333,
+                 broken_sensors_rx: list = [],
+                 broken_sensors_tx: list = [],
                  idealized_beampattern_preserve_equivalent_beam_angle: bool = True,
-                 transmit_steeringangle_degrees = 0,
+                 transmit_steeringangle_degrees: int = 0,
                  progress: bool = False
+
                  ):
         """The Multibeam class holds processing parameters for the MBES simulation
 
@@ -87,13 +100,20 @@ class Multibeam(object):
         self.n_beams = beamsteeringangles_degrees.shape[0]
         self.n_samples = sampleranges.shape[0]
 
-        self.effective_pulse_length = effective_pulse_length
+        self.effective_pulse_length_rx = effective_pulse_length_rx
+        self.effective_pulse_length_tx = effective_pulse_length_tx
 
-        self.window_rx = window
-        self.window_tx = window
+        self.window_rx = window_rx
+        self.window_tx = window_tx
 
         self.f0 = f0
-        self.freq = freq
+        self.freq_rx = freq_rx
+        self.freq_tx = freq_tx
+
+        self.sensors_spacing_rx = sensors_spacing_rx
+        self.sensors_spacing_tx = sensors_spacing_tx
+        self.broken_sensors_rx = broken_sensors_rx
+        self.broken_sensors_tx = broken_sensors_tx
 
         self.idealized_beampattern_preserve_equivalent_beam_angle = idealized_beampattern_preserve_equivalent_beam_angle
 
@@ -113,10 +133,9 @@ class Multibeam(object):
 
         self.wci_sample_volume = None
 
-        self.set_navigation(0,0,0,0,0,0)
+        self.set_navigation(0, 0, 0, 0, 0, 0)
 
-        self.recalculate(progress = progress)
-
+        self.recalculate(progress=progress)
 
     def recalculate(self, no_beampattern: bool = False, progress: bool = False):
         """Recalculate the beampattern, sample volume and beamspacing
@@ -139,14 +158,15 @@ class Multibeam(object):
                                                       self.sampleranges,
                                                       self.equivalent_beam_angle_tx_radians,
                                                       self.equivalent_beam_angles_beam_rx_radians,
-                                                      self.effective_pulse_length)
+                                                      self.effective_pulse_length_rx)
 
         self.beamspacing_degrees = []
         for bnr in range(len(self.beamsteeringangles_degrees)):
             if bnr == 0:
                 self.beamspacing_degrees.append(self.beamsteeringangles_degrees[1] - self.beamsteeringangles_degrees[0])
             elif bnr == len(self.beamsteeringangles_degrees) - 1:
-                self.beamspacing_degrees.append(self.beamsteeringangles_degrees[-1] - self.beamsteeringangles_degrees[-2])
+                self.beamspacing_degrees.append(
+                    self.beamsteeringangles_degrees[-1] - self.beamsteeringangles_degrees[-2])
             else:
                 self.beamspacing_degrees.append(
                     (self.beamsteeringangles_degrees[bnr + 1] - self.beamsteeringangles_degrees[bnr - 1]) / 2)
@@ -155,8 +175,7 @@ class Multibeam(object):
         if (progress):
             print('recalculated MBES')
 
-
-    def create_beampattern_rx(self, progress:bool = False):
+    def create_beampattern_rx(self, progress: bool = False):
         """Create the beampattern for the receiver
 
         Parameters
@@ -172,69 +191,81 @@ class Multibeam(object):
         else:
             iterator = self.beamsteeringangles_degrees
 
-        self.beampattern_beam_rx = np.empty((self.n_beams,bf.ANGLE_RESOLUTION),dtype=np.float64)
-        self.beampattern_idealized_beam_rx = np.empty((self.n_beams,bf.ANGLE_RESOLUTION),dtype=np.float64)
-        self.equivalent_beam_angles_beam_rx_degrees = np.empty(self.n_beams,dtype=np.float64)
-        self.equivalent_beam_angles_beam_rx_radians = np.empty(self.n_beams,dtype=np.float64)
+        print(self.beamsteeringangles_degrees)
+
+        self.beampattern_beam_rx = np.empty((self.n_beams, bf.ANGLE_RESOLUTION), dtype=np.float64)
+        self.beampattern_idealized_beam_rx = np.empty((self.n_beams, bf.ANGLE_RESOLUTION), dtype=np.float64)
+        self.equivalent_beam_angles_beam_rx_degrees = np.empty(self.n_beams, dtype=np.float64)
+        self.equivalent_beam_angles_beam_rx_radians = np.empty(self.n_beams, dtype=np.float64)
 
         self.center_beam_index_rx = None
 
         angle_last = np.nan
-        for bnr,beam_steering_angle in enumerate(iterator):
+        for bnr, beam_steering_angle in enumerate(iterator):
             if self.center_beam_index_rx is None:
                 if abs(beam_steering_angle) > abs(angle_last):
-                    self.center_beam_index_rx = bnr -1
+                    self.center_beam_index_rx = bnr - 1
                 else:
                     angle_last = beam_steering_angle
 
             self.beampattern_beam_rx[bnr] = bf.generate_delay_and_sum_beampattern(beam_steering_angle,
-                                                                                  window=window,
+                                                                                  window=self.window_rx,
                                                                                   f0=self.f0,
-                                                                                  freq=self.freq)
+                                                                                  freq=self.freq_rx,
+                                                                                  broken_sensors=self.broken_sensors_rx,
+                                                                                  sensor_spacing=self.sensors_spacing_rx)
 
             self.equivalent_beam_angles_beam_rx_degrees[bnr] = bf.get_equivalent_beam_angle_from_beampattern(
                 self.beampattern_beam_rx[bnr]
             )
 
-            self.equivalent_beam_angles_beam_rx_radians[bnr] = self.equivalent_beam_angles_beam_rx_degrees[bnr] * hlp.M_PI_180
-
-            self.beampattern_idealized_beam_rx[bnr] = bf.generate_idealized_beampattern(
-                beam_steering_angle,
-                window=window,
-                f0=self.f0,
-                freq=self.freq,
-                equivalent_beam_angle_degrees=self.equivalent_beam_angles_beam_rx_degrees[bnr],
-                preserve_equivalent_beam_angle=self.idealized_beampattern_preserve_equivalent_beam_angle
-            )
+            self.equivalent_beam_angles_beam_rx_radians[bnr] = self.equivalent_beam_angles_beam_rx_degrees[
+                                                                   bnr] * hlp.M_PI_180
+            #
+            # print(beam_steering_angle)
+            # print(self.equivalent_beam_angles_beam_rx_degrees[bnr])
+            # print(self.idealized_beampattern_preserve_equivalent_beam_angle)
+            # self.beampattern_idealized_beam_rx[bnr] = bf.generate_idealized_beampattern(
+            #     beam_steering_angle,
+            #     window=self.window_rx,
+            #     f0=self.f0,
+            #     freq=self.freq_rx,
+            #     equivalent_beam_angle_degrees=self.equivalent_beam_angles_beam_rx_degrees[bnr],
+            #     preserve_equivalent_beam_angle=self.idealized_beampattern_preserve_equivalent_beam_angle
+            # )
 
     def create_beampattern_tx(self):
         """Create the beampattern for the transmitter
         """
 
-        window = self.window_tx
+        print(self.transmit_steeringangle_degrees)
+        print(self.freq_tx)
+        print(self.sensors_spacing_tx)
+        print(np.array(self.broken_sensors_tx))
 
-        self.beampattern_tx = bf.generate_delay_and_sum_beampattern(0,
-                                                                    window=window,
+        self.beampattern_tx = bf.generate_delay_and_sum_beampattern(self.transmit_steeringangle_degrees,
+                                                                    window=self.window_tx,
                                                                     f0=self.f0,
-                                                                    freq=self.freq)
+                                                                    freq=self.freq_tx,
+                                                                    broken_sensors=np.array(self.broken_sensors_tx),
+                                                                    sensor_spacing=self.sensors_spacing_tx)
 
         self.equivalent_beam_angle_tx_degrees = bf.get_equivalent_beam_angle_from_beampattern(self.beampattern_tx)
         self.equivalent_beam_angle_tx_radians = self.equivalent_beam_angle_tx_degrees * hlp.M_PI_180
 
-        self.beampattern_idealized_tx = bf.generate_idealized_beampattern(
-            self.transmit_steeringangle_degrees,
-            window=window,
-            f0=self.f0,
-            freq=self.freq,
-            equivalent_beam_angle_degrees=self.equivalent_beam_angle_tx_degrees,
-            preserve_equivalent_beam_angle=self.idealized_beampattern_preserve_equivalent_beam_angle)
-
+        # self.beampattern_idealized_tx = bf.generate_idealized_beampattern(
+        #     self.transmit_steeringangle_degrees,
+        #     window=self.window_tx,
+        #     f0=self.f0,
+        #     freq=self.freq_rx,
+        #     equivalent_beam_angle_degrees=self.equivalent_beam_angle_tx_degrees,
+        #     preserve_equivalent_beam_angle=self.idealized_beampattern_preserve_equivalent_beam_angle)
 
     def plot_beampattern_rx(self,
-                            fig: plt.Figure=None,
+                            fig: plt.Figure = None,
                             ax: plt.Axes = None,
                             plot_beampattern: bool = True,
-                            plot_idealized_beampattern: bool = True,
+                            plot_idealized_beampattern: bool = False,
                             close_plots: bool = False,
                             log: bool = True,
                             windows_names_pltbp_pltideal: (np.ndarray, str, bool, bool) = None,
@@ -279,9 +310,9 @@ class Multibeam(object):
         beampattern = []
         if windows_names_pltbp_pltideal is None:
             if plot_beampattern:
-                beampattern.append([self.beampattern_beam_rx,"beampattern"])
+                beampattern.append([self.beampattern_beam_rx, "beampattern"])
             if plot_idealized_beampattern:
-                beampattern.append([self.beampattern_idealized_beam_rx,"idealized"])
+                beampattern.append([self.beampattern_idealized_beam_rx, "idealized"])
 
         else:
             old_window = self.window_rx
@@ -297,10 +328,11 @@ class Multibeam(object):
             self.window_rx = old_window
             self.recalculate(no_beampattern=False)
 
-
-
-        for index in [self.center_beam_index_rx, -1]:
-            for bp,bpname in beampattern:
+        # print(bf.BEAMPATTERN_ANGLES_DEGREES)
+        # for index in [self.center_beam_index_rx, 254]:
+        for index in [440]:
+            print(index)
+            for bp, bpname in beampattern:
 
                 if log:
                     bp = hlp.to_db(bp[index])
@@ -308,18 +340,18 @@ class Multibeam(object):
                 ax.plot(bf.BEAMPATTERN_ANGLES_DEGREES,
                         bp,
                         marker=marker,
-                        label="rx {}: {}/{} °".format(bpname,index,round(self.beamsteeringangles_degrees[index],2)))
+                        label="rx {}: {}/{} °".format(bpname, index, round(self.beamsteeringangles_degrees[index], 2)))
 
         if add_legend:
             ax.legend()
 
-        return ax.figure,ax
+        return ax.figure, ax
 
     def plot_beampattern_tx(self,
-                            fig: plt.Figure=None,
+                            fig: plt.Figure = None,
                             ax: plt.Axes = None,
                             plot_beampattern: bool = True,
-                            plot_idealized_beampattern: bool = True,
+                            plot_idealized_beampattern: bool = False,
                             close_plots: bool = False,
                             log: bool = True,
                             windows_names_pltbp_pltideal: (np.ndarray, str, bool, bool) = None,
@@ -366,7 +398,7 @@ class Multibeam(object):
             if plot_beampattern:
                 beampattern.append([self.beampattern_tx, "beampattern"])
             if plot_idealized_beampattern:
-                beampattern.append([self.beampattern_idealized_tx,"idealized"])
+                beampattern.append([self.beampattern_idealized_tx, "idealized"])
         else:
             old_window = self.window_tx
             for window, window_name, plt_bp, plt_ideal in tqdm(windows_names_pltbp_pltideal):
@@ -381,15 +413,16 @@ class Multibeam(object):
             self.window_tx = old_window
             self.recalculate(no_beampattern=False)
 
-        for bp,bpname in beampattern:
+        for bp, bpname in beampattern:
             if log:
                 bp = hlp.to_db(bp)
-            ax.plot(bf.BEAMPATTERN_ANGLES_DEGREES, bp, marker=marker, label = bpname)
+            ax.plot(bf.BEAMPATTERN_ANGLES_DEGREES, bp, marker=marker, label=bpname)
+            # print(bf.BEAMPATTERN_ANGLES_DEGREES)
 
         if add_legend:
             ax.legend()
 
-        return ax.figure,ax
+        return ax.figure, ax
 
     def set_navigation(self,
                        x: float, y: float, z: float,
@@ -418,15 +451,16 @@ class Multibeam(object):
         self.pos_y = y
         self.pos_z = z
         if degrees:
-            self.yaw_degrees   = yaw
+            self.yaw_degrees = yaw
             self.pitch_degrees = pitch
-            self.roll_degrees  = roll
+            self.roll_degrees = roll
         else:
-            self.yaw_degrees   = math.degrees(yaw)
+            self.yaw_degrees = math.degrees(yaw)
             self.pitch_degrees = math.degrees(pitch)
-            self.roll_degrees  = math.degrees(roll)
+            self.roll_degrees = math.degrees(roll)
 
-    def get_relative_xyz(self,targets_x: np.ndarray, targets_y: np.ndarray, targets_z: np.ndarray) -> (np.ndarray, np.ndarray, np.ndarray):
+    def get_relative_xyz(self, targets_x: np.ndarray, targets_y: np.ndarray, targets_z: np.ndarray) -> (
+    np.ndarray, np.ndarray, np.ndarray):
         """Get the positions (x,y,z) of the targets relative to the transceiver
 
         Note: this function is called by get_target_range_tx_rx
@@ -458,7 +492,8 @@ class Multibeam(object):
 
         return tx, ty, tz
 
-    def get_target_range_tx_rx(self, targets_x: np.ndarray, targets_y: np.ndarray, targets_z: np.ndarray, degrees: bool = True) -> (np.ndarray, np.ndarray, np.ndarray):
+    def get_target_range_tx_rx(self, targets_x: np.ndarray, targets_y: np.ndarray, targets_z: np.ndarray,
+                               degrees: bool = True) -> (np.ndarray, np.ndarray, np.ndarray):
         """_summary_
 
         Parameters
@@ -475,14 +510,13 @@ class Multibeam(object):
         (np.ndarray, np.ndarray, np.ndarray)
             Ranges, tx angles, rx angles of the targets
         """
-        return tf.get_target_ranges_txangles_rxangles(*self.get_relative_xyz(targets_x, targets_y, targets_z), degrees = degrees)
-
-
+        return tf.get_target_ranges_txangles_rxangles(*self.get_relative_xyz(targets_x, targets_y, targets_z),
+                                                      degrees=degrees)
 
     def plot_rel_pos(self, targets_x: np.ndarray, targets_y: np.ndarray, targets_z: np.ndarray,
-                            fig: plt.Figure=None,
-                            ax: plt.Axes = None,
-                            close_plots: bool = False):
+                     fig: plt.Figure = None,
+                     ax: plt.Axes = None,
+                     close_plots: bool = False):
         """Plot the relative positions of the targets
 
         Parameters
@@ -515,16 +549,16 @@ class Multibeam(object):
         targets_x = np.array(targets_x)
         targets_y = np.array(targets_y)
         targets_z = np.array(targets_z)
-        tx,ty,tz = self.get_relative_xyz(targets_x, targets_y, targets_z)
+        tx, ty, tz = self.get_relative_xyz(targets_x, targets_y, targets_z)
 
-        axes = fig.subplots(nrows=2,ncols=2)
+        axes = fig.subplots(nrows=2, ncols=2)
         axit = axes.flat
 
         ax = next(axit)
         ax.clear()
         ax.set_title('targets y-z')
-        ax.scatter(targets_y, -targets_z, label = 'original')
-        ax.scatter(ty, -tz, label = 'transformed')
+        ax.scatter(targets_y, -targets_z, label='original')
+        ax.scatter(ty, -tz, label='transformed')
         ax.set_aspect('equal')
         ax.set_xlabel("y")
         ax.set_xlabel("y")
@@ -532,14 +566,14 @@ class Multibeam(object):
         ax.set_ylabel("z")
         ax.legend()
 
-        #mbes = MBES(120, 1, 1)
-        #mbes.plot_across_swathoverlap_at_linespacing(120, 0, axes=ax)
+        # mbes = MBES(120, 1, 1)
+        # mbes.plot_across_swathoverlap_at_linespacing(120, 0, axes=ax)
 
         ax = next(axit)
         ax.clear()
         ax.set_title('targets x-z')
-        ax.scatter(targets_x, -targets_z, label = 'original')
-        ax.scatter(tx, -tz, label = 'transformed')
+        ax.scatter(targets_x, -targets_z, label='original')
+        ax.scatter(tx, -tz, label='transformed')
         ax.set_aspect('equal')
         ax.set_xlabel("x")
         ax.set_xlabel("x")
@@ -548,13 +582,13 @@ class Multibeam(object):
         ax.set_xlim(-220, 220)
         ax.legend()
 
-        #mbes.plot_along(120, "blue", True, axes=ax)
+        # mbes.plot_along(120, "blue", True, axes=ax)
 
         ax = next(axit)
         ax.clear()
         ax.set_title('targets x-y')
-        ax.scatter(targets_y, targets_x, label = 'original')
-        ax.scatter(ty, tx, label = 'transformed')
+        ax.scatter(targets_y, targets_x, label='original')
+        ax.scatter(ty, tx, label='transformed')
         ax.set_aspect('equal')
         ax.set_xlabel("y")
         ax.set_xlabel("y")
@@ -580,15 +614,17 @@ class Multibeam(object):
                   self.beamsteeringangles_degrees[-1] + self.beamspacing_degrees[-1] * 0.5,
                   self.sampleranges[-1] + samplespacing * 0.5,
                   self.sampleranges[0] - samplespacing * 0.5]
+
+        print(extent)
         return extent
 
     def create_wci(self, targets_x: np.ndarray,
                    targets_y: np.ndarray,
                    targets_z: np.ndarray,
                    targets_val: np.ndarray,
-                   return_ts : bool = False,
-                   return_sv : bool = True,
-                   idealized_beampattern: bool = False)-> np.ndarray:
+                   return_ts: bool = False,
+                   return_sv: bool = True,
+                   idealized_beampattern: bool = False) -> np.ndarray:
         """Create a Water Column Image (wci) for the given targets
 
         Parameters
@@ -633,26 +669,26 @@ class Multibeam(object):
                                self.sampleranges,
                                self.beampattern_tx,
                                self.beampattern_beam_rx,
-                               pf.get_hann_pulse_response, self.effective_pulse_length)
+                               pf.get_hann_pulse_response, self.effective_pulse_length_rx)
         else:
             ts = ef.create_wci(targets_range, targets_tx, targets_rx, np.array(targets_val),
                                self.beamsteeringangles_radians,
                                self.sampleranges,
                                self.beampattern_idealized_tx,
                                self.beampattern_idealized_beam_rx,
-                               pf.get_rect_pulse_response, self.effective_pulse_length)
+                               pf.get_rect_pulse_response, self.effective_pulse_length_rx)
 
         if return_sv:
             sv = ts / self.wci_sample_volume
 
             if return_ts:
-                return ts,sv
+                return ts, sv
             return sv
 
         if return_ts:
             return ts
 
-    def raytrace_wci(self) -> (np.ndarray,np.ndarray,np.ndarray):
+    def raytrace_wci(self) -> (np.ndarray, np.ndarray, np.ndarray):
         """Return the x,y,z coordinates of the wci in the absolute coordinate system.
         Note this function uses the current position and orientation of the sonar set by the 'set_navigation' function.
 
@@ -670,60 +706,72 @@ class Multibeam(object):
                               math.radians(self.roll_degrees))
 
 
-
-
 if __name__ == '__main__':
     # some plotting examples
     init(1800)
+    import matplotlib
+
+    matplotlib.use('TkAgg')
 
     mbes = Multibeam(
-        window=signal.windows.exponential(128,tau=64),
-        progress=True
+        window_tx=signal.windows.chebwin(180, at=30),
+        window_rx=signal.windows.chebwin(288, at=25),
+        progress=True, freq_rx=24000, freq_tx = 25500, f0=22500 ,effective_pulse_length_rx = 0.02,
+        sensors_spacing_rx= 0.02708, sensors_spacing_tx= 0.04333, broken_sensors_rx  = [3,161,281,241,90,77,25,29],
+    broken_sensors_tx = [31,71,175], transmit_steeringangle_degrees= 1.25,
+        beamsteeringangles_degrees=np.linspace(-60, 60, 880)
     )
 
-    fig,ax = mbes.plot_beampattern_rx()
-    mbes.plot_beampattern_tx(ax = ax)
-    ax.legend()
+    # fig,ax = mbes.plot_beampattern_rx()
+    # #mbes.plot_beampattern_tx(ax = ax)
+    # ax.legend()
+    # plt.show()
 
     tx = [0]
     ty = [0]
-    tz = [60]
+    tz = [0]
     tv = [1]
 
-    mbes.set_navigation(x = 0,
-                        y = 0,
-                        z = 0,
-                        yaw = 0,
-                        pitch = 0,
-                        roll = 45)
+    mbes.set_navigation(x=0,
+                        y=0,
+                        z=0,
+                        yaw=0,
+                        pitch=0,
+                        roll=0)
 
-    mbes.plot_rel_pos(tx,ty,tz)
+    # mbes.plot_rel_pos(tx,ty,tz)
 
-    tr,ttx,trx = mbes.get_target_range_tx_rx(tx,ty,tz)
+    # tr,ttx,trx = mbes.get_target_range_tx_rx(tx,ty,tz)
+    #
+    # ts,sv = mbes.create_wci(tx,ty,tz,tv,return_ts=True,return_sv=True)
+    #
+    # # fig = plt.figure('echo')
+    # # fig.clear()
+    # # fig.show()
+    #
+    # ts_db = hlp.to_db(ts)
+    # sv_db = hlp.to_db(sv)
 
-    ts,sv = mbes.create_wci(tx,ty,tz,tv,return_ts=True,return_sv=True)
+    # axes = fig.subplots(ncols=2)
+    # axit = axes.flat
+    #
+    # ax = next(axit)
+    # ax.set_title('ts')
+    # ax.imshow(ts.transpose(), extent=mbes.get_wci_extent())
+    # ax.scatter(trx, tr)
+    # windows_names_pltbp_pltideal = [
+    #     # (signal.windows.boxcar(880), 'boxcar', True, True),
+    #
+    #     (signal.windows.exponential(288, tau=144), 'exponential', True, False),
+    #     (signal.windows.chebwin(288, at=50), "Cheby", True, False),
+    #     (signal.windows.hann(128), 'hann', True, False)
+    # ]
 
-    fig = plt.figure('echo')
-    fig.clear()
-    fig.show()
-
-    ts_db = hlp.to_db(ts)
-    sv_db = hlp.to_db(sv)
-
-    axes = fig.subplots(ncols=2)
-    axit = axes.flat
-
-    ax = next(axit)
-    ax.set_title('ts')
-    ax.imshow(ts.transpose(), extent=mbes.get_wci_extent())
-    ax.scatter(trx, tr)
-    windows_names_pltbp_pltideal = [
-        (signal.windows.boxcar(128), 'boxcar', True, True),
-        (signal.windows.exponential(128, tau=64), 'exponential', True, False),
-        (signal.windows.hann(128), 'hann', True, False),
-    ]
-
-    fig, ax = mbes.plot_beampattern_rx(windows_names_pltbp_pltideal=windows_names_pltbp_pltideal,marker=None)
-    fig, ax = mbes.plot_beampattern_tx(windows_names_pltbp_pltideal=windows_names_pltbp_pltideal)
+    # fig, ax = mbes.plot_beampattern_rx(windows_names_pltbp_pltideal=windows_names_pltbp_pltideal,marker=None)
+    # fig, ax = mbes.plot_beampattern_tx(windows_names_pltbp_pltideal=windows_names_pltbp_pltideal)
+    #
+    # plt.show()
+    fig, ax = mbes.plot_beampattern_rx(windows_names_pltbp_pltideal=None, marker=None)
+    fig, ax = mbes.plot_beampattern_tx(windows_names_pltbp_pltideal=None, marker=None)
 
     plt.show()

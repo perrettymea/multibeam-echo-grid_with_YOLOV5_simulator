@@ -15,18 +15,24 @@ Functions to create beampattern for the MBES simulation
 
 # ------------------- Imports -------------------
 import math
+import sys
+sys.path.append('W:\\13_TRACKING\\URBAN\\src\\')
 import numpy as np
 from scipy import signal
-
+import yaml
 from numba import njit, prange
 import numba.types as ntypes
 
 import mbes_sim.functions.helperfunctions as hlp
 
+# load config files
+
+
+
 # ------------------- Processing setup -------------------
 # This is the angular resolution used for the beampattern array
 # 18000*3 = 0.00333333°
-ANGLE_RESOLUTION: int = 18000 * 3 + 1
+ANGLE_RESOLUTION: int = 18000 * 10 + 1
 
 
 def init(angle_resolution=ANGLE_RESOLUTION):
@@ -252,6 +258,9 @@ def generate_delay_and_sum_beampattern(
     window: np.ndarray,
     f0: float = 100000,
     freq: float = 80000,
+    broken_sensors: list = [],
+    sensor_spacing: float = 0.02708
+
 ) -> np.ndarray:
     """Create beampattern response for an indivdual beam using 2D delay and sum beamforming.
     Adapted from Dr. Andrew Greensted http://www.labbookpages.co.uk/audio/beamforming/delaySum.html
@@ -273,6 +282,8 @@ def generate_delay_and_sum_beampattern(
     -------
     np.ndarray
         beampattern - Array with beam response value (Power) normalized to 1 (max)
+        :param num_multiping:
+        :param antenna:
     """
 
     assert steering_angle_degrees >= -90.0, "Angle outside +-90°"
@@ -284,22 +295,47 @@ def generate_delay_and_sum_beampattern(
     window_power *= window_power
 
     # compute spacing
-    sound_speed = 1500.0  # m/s
-    lamda = sound_speed / f0  # f0 is the frequency the transducer was designed for
-    spacing = lamda / 2  # Element separation in meters
+    sound_speed = 1519.1  # m/s
+
+    lamda = sound_speed / freq  # f0 is the frequency the transducer was designed for
+    spacing = sensor_spacing
+    # test si spacing coherent avec frequence
+
+    # if spacing < lamda / 2:
+    #     print("Spacing ok for antenna coherence")
+    # else:
+    #     print("Issue with antenna module spacing !")
 
     steering_angle_degrees = hlp.M_PI_180 * steering_angle_degrees
 
     beampattern = np.zeros(ANGLE_RESOLUTION, dtype=ntypes.float64)
+    inter_module_spacing = 0.0155
+    distance_capteurs_defectueux = 0
+    capteurs_HS = broken_sensors
 
-    # Iterate through arrival angles to pointsgenerate response
+
+    # Iterate through arrival angles to points generate response
+
     for a in prange(ANGLE_RESOLUTION):
 
         real_sum = 0
         imag_sum = 0
 
-        # Time it takes the wave to move from one element to the next.
-        # Is corrected by the artificial delay added by steering the array
+
+            #on arrive au bout d'un module
+        delta_delay_module = (
+                          (spacing + inter_module_spacing)
+                * (math.sin(BEAMPATTERN_ANGLES_RAD[a]) - math.sin(steering_angle_degrees))
+                / sound_speed
+        )
+
+        delta_capteur_HS = (
+                (spacing + distance_capteurs_defectueux)
+                * (math.sin(BEAMPATTERN_ANGLES_RAD[a]) - math.sin(steering_angle_degrees))
+                / sound_speed
+        )
+
+
         delta_delay = (
             spacing
             * (math.sin(BEAMPATTERN_ANGLES_RAD[a]) - math.sin(steering_angle_degrees))
@@ -308,17 +344,34 @@ def generate_delay_and_sum_beampattern(
 
         # Phase change of wave when moving from one element to the next
         delta_phase = hlp.M_2_PI * freq * delta_delay
+        delta_phase_HS = hlp.M_2_PI * freq * delta_capteur_HS
+        delta_phase_module = hlp.M_2_PI * freq * delta_delay_module
 
+        sum = 0
+        nb_module = 0
         # Iterate through array elements
         for element_nr, element_response in enumerate(window):
+            #print(element_nr)
+            if sum%24==0:
+                real_sum += math.cos(element_nr * delta_phase_module) * element_response
+                imag_sum += math.sin(element_nr * delta_phase_module) * element_response
+                nb_module+=1
 
+            if sum in capteurs_HS:
+                real_sum += math.cos(element_nr * delta_phase_HS) * element_response
+                imag_sum += math.sin(element_nr * delta_phase_HS) * element_response
+                nb_module += 1
+            else:
             # Add Waves according to phase difference
-            real_sum += math.cos(element_nr * delta_phase) * element_response
-            imag_sum += math.sin(element_nr * delta_phase) * element_response
+                real_sum += math.cos(element_nr * delta_phase) * element_response
+                imag_sum += math.sin(element_nr * delta_phase) * element_response
+            sum+=1
 
         response = (real_sum * real_sum + imag_sum * imag_sum) / window_power
 
         beampattern[a] = response
+
+        #print(nb_module)
 
     return beampattern
 
@@ -459,7 +512,7 @@ if __name__ == "__main__":
     # ax.append(fig.add_subplot(projection='polar'))
     # ax.append(fig.add_subplot(projection='rect'))
 
-    elements = 28
+    elements = 12
 
     crazy = np.zeros(elements)
 
@@ -467,6 +520,10 @@ if __name__ == "__main__":
         [np.ones(elements), "rect"],
         [signal.windows.hann(elements), "hann"],
         [signal.windows.exponential(elements, tau=elements / 2), "exp elements/2"],
+    ]
+    windows = [
+
+      [np.ones(elements), "rect"]
     ]
 
     angles = [i for i in np.linspace(-60, 60, int(round(120 / 3)) + 1)]

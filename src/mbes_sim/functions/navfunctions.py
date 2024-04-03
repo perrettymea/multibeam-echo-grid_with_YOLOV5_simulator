@@ -323,6 +323,7 @@ class Survey(object):
             min_x, max_x + ping_spacing * 0.001, ping_spacing, dtype=float
         )
         num_pings = len(pingpositions_x)
+        print("Survey position:",len(pingpositions_x), pingpositions_x )
 
         # initialize arrays
         pingpositions_y = np.zeros(num_pings)
@@ -332,6 +333,29 @@ class Survey(object):
         heaves = np.zeros(num_pings)
         times = np.linspace(0, max_time, num_pings)
 
+        # create survey object
+        return Survey(
+            pingpositions_x, pingpositions_y, yaws, pitchs, rolls, heaves, times
+        )
+    def from_data(
+        survey_positions: np.array = None,
+        speedKnots: float = 3,
+    ) -> Survey:
+        speed = speedKnots * 0.514
+
+        pingpositions_x = survey_positions["coord_e"]
+        num_pings = len(pingpositions_x)
+    
+        # initialize arrays
+        pingpositions_y = survey_positions["coord_n"]
+        yaws = np.zeros(num_pings)
+        pitchs = np.zeros(num_pings)
+        rolls = np.zeros(num_pings)
+        heaves = np.zeros(num_pings)
+        dist = abs(max(pingpositions_x) - min(pingpositions_x))
+        max_time = dist / speed
+        times = np.linspace(0, max_time, num_pings)
+        print("pingpositions_x",pingpositions_x,)
         # create survey object
         return Survey(
             pingpositions_x, pingpositions_y, yaws, pitchs, rolls, heaves, times

@@ -11,6 +11,9 @@ Functions to create bubbles for the MBES simulation
 
 # ------------------- Imports -------------------
 import math
+import sys
+
+sys.path.append('W:\\13_TRACKING\\URBAN\\src\\')
 import numpy as np
 
 import random
@@ -469,6 +472,7 @@ class BubbleGenerator(object):
                     if z < min_z or z > max_z:
                         continue
 
+
                     break
                 else:
                     # this will execute if the loop runs till the end without ever reaching a break
@@ -815,19 +819,15 @@ if __name__ == "__main__":
 
     targets = \
         bubbleGenerator.generate_bubblestreams_within_cylindrical_section_along_path(
-            start_x=-200,
-            end_x=200,
-            min_range=10,
-            max_range=120,
-            min_beamsteeringangle=-60,
-            max_beamsteeringangle=60,
-            min_z=8,
-            # max_z=90,
-            min_y=-90,
-            max_y=60,
-            zdist_list=[0.1, 1, 5],
-            return_zero_bubbles=True
-        )
+            start_x=-1.5,
+            end_x=1.5,
+            min_range=50,
+            max_range=250,
+            min_beamsteeringangle=-90,
+            max_beamsteeringangle=90,
+            min_y=41,
+            max_y=43,
+            zdist_list=[0.1])
     targets.plot(name = 'Bubblestreams')
 
 
